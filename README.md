@@ -13,7 +13,23 @@ It's a good idea to include figures here to visualize the results.
 
 ## Usage
 ### Setup
-Mention the environment the code was run on during development and testing as well as any dependencies that are needed.
+Data fitting was performed in [R 3.4.2](https://cloud.r-project.org/) and [RStudio Desktop](https://posit.co/download/rstudio-desktop/) with the following packages:
+* readxl
+* rjags using [JAGS 4.3.1](https://mcmc-jags.sourceforge.io/)
+* fitdistrplus
+* stringr
+* pastecs
+* knitr
+* MASS
+
+ @Risk models were run using [@Risk 8.1](https://lumivero.com/products/at-risk/), R-based models were run in R 3.4.2 with RStudio Desktop with the following packages:
+ * readxl
+* parallel
+* plyr
+* dplyr
+* MASS
+* BAS
+* Rmpfr
 
 ### Running
 Explain in detailed steps how to run the code in order to reproduce the results shown above in the results section.
@@ -31,7 +47,13 @@ Train the model.
 You can view the list of authors in the [AUTHORS](/AUTHORS) file.
 
 ## Contact
-Corresponding author. 103 Agricultural Bioprocess Lab, 1302 W. Pennsylvania, Urbana, IL,91361801. USA. +1-217-265-0963. [mstasie@illinois.edu](mailto:mstasie@illinois.edu).
+Corresponding author: Matthew J. Stasiewicz<br>
+103 Agricultural Bioprocess Lab<br>
+1302 W. Pennsylvania<br>
+Urbana, IL, 1361801<br>
+USA<br>
++1-217-265-0963<br>
+[mstasie@illinois.edu](mailto:mstasie@illinois.edu)
 
 ## Citation
 Include citation here.
@@ -40,15 +62,7 @@ Include citation here.
 This project is licensed under the [Name of license]. Please see the [LICENSE](/LICENSE) file for details.
 
 ## Acknowledgements
-We would like to extend our heartfelt thanks to the following individuals who have contributed to this project.
-* Full Name
-* Full Name
-* ...
-
-In addition to the contributors listed above, we would like to recognize the exceptional contributions of the following individuals:
-* Full Name - For significant contributions or leadership.
-* Full Name - For valuable contributions and ongoing support.
-* ...
+Both Stasiewicz and Wiedmann are members of a Coalition for Poultry Safety Reform which includes volunteer members from the poultry industry, consumer groups, and academics.
 
 ## Funding
-Include the source of project funding here.
+This study was supported by a US Poultry and Egg Association grant to Stasiewicz and Wiedmann, for Project #BRF-015 Risk Assessment Comparing Alternative Approaches to Regulating _Salmonella_ in Poultry by Public Health Impact Factors.
