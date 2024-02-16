@@ -1,0 +1,47 @@
+# JAGS model:
+  model{
+      
+      # Loop for the screen-positive tests that were also evaluated by MPN:
+      
+      for (i in 1:N.pos.test.mpn) {
+      
+      lambda[i] ~ dlnorm(mu,tau)
+      p_screen[i] <- 1-exp(-v.screen*lambda[i]) # screening test
+      p_10[i] <- 1-exp(-v.mpn*lambda[i]) # Probabilities for MPN tubes
+      p_1[i] <- 1- exp(-(v.mpn/10)*lambda[i])
+      p_0.1[i] <- 1- exp(-(v.mpn/100)*lambda[i])
+      p_0.01[i] <- 1- exp(-(v.mpn/1000)*lambda[i])
+      p_0.001[i] <- 1- exp(-(v.mpn/10000)*lambda[i])
+      
+      
+      #Likelihood for the qualitative +/- screening test
+      screened[i] ~ dbin(p_screen[i],1) #Test positive on screening test
+
+      # Likelihoods for the MPN data at each dilution
+      tube[i,1] ~ dbin(p_10[i],N.tubes)  # with N.tubes=3, the draw is a number btw 0 and 3, included.
+      tube[i,2] ~ dbin(p_1[i],N.tubes)
+      tube[i,3] ~ dbin(p_0.1[i],N.tubes)
+      tube[i,4] ~ dbin(p_0.01[i],N.tubes)
+      tube[i,5] ~ dbin(p_0.001[i],N.tubes)
+      
+      }  # end of loop on screen-positive MPN-enumerated samples (i)
+      
+      
+      # Loop over samples screened with no enumeration: (here all screen+ were enumerated)
+
+      for (j in (N.pos.test.mpn+1):(N.total)){    
+          lambda[j] ~ dlnorm(mu,tau)
+          p_screen[j] = 1-exp(-v.screen*lambda[j])
+          screened[j] ~ dbin(p_screen[j],1)
+      }
+       
+     
+      # PRIORS
+      #Diffuse priors of a lognormal describing CFU per gram of product.  
+      
+      mu ~ dnorm(-8,4)  
+      tau ~ dgamma(1,30)  
+      sigma <- sqrt(1 / tau)
+      
+      
+      }  # end of model
