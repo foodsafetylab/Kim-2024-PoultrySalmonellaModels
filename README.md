@@ -13,7 +13,7 @@ It's a good idea to include figures here to visualize the results.
 
 ## Usage
 ### Data Generation
-Simulation-produced data can be generated from the models, files used in the associated publication can be downloaded from Box due to GitHub file size limitations.
+Simulation-produced data can be generated from the models, files used in the associated publication can be [downloaded from Box](https://uofi.box.com/s/r7p3hoty6ymlomipav1xbgzv2p3rf8dy) due to GitHub file size limitations.
 
 ### Setup
 Data fitting was performed in [R 3.4.2](https://cloud.r-project.org/) and [RStudio Desktop](https://posit.co/download/rstudio-desktop/) with the following packages:
