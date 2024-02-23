@@ -12,6 +12,9 @@ Explain the results/findings of the project.
 It's a good idea to include figures here to visualize the results.
 
 ## Usage
+### Data Generation
+Simulation-produced data can be generated from the models, files used in the associated publication can be downloaded from Box due to GitHub file size limitations.
+
 ### Setup
 Data fitting was performed in [R 3.4.2](https://cloud.r-project.org/) and [RStudio Desktop](https://posit.co/download/rstudio-desktop/) with the following packages:
 * readxl
@@ -59,7 +62,7 @@ USA<br>
 Include citation here.
 
 ## License
-This project is licensed under the [Name of license]. Please see the [LICENSE](/LICENSE) file for details.
+This project's code is licensed under the GNU General Public License v3.0 and dataset is licensed the Creative Commons Attribution Share Alike 4.0 International license. Please see the [LICENSE.code](/LICENSE.code) and [LICENSE.dataset](/LICENSE.dataset) files for details.
 
 ## Acknowledgements
 Both Stasiewicz and Wiedmann are members of a Coalition for Poultry Safety Reform which includes volunteer members from the poultry industry, consumer groups, and academics.
