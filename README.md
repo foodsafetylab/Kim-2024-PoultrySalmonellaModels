@@ -1,15 +1,7 @@
 # Kim-2024-PoultrySalmonellaModels
 
 ## Overview
-### Introduction
-Introduce the project and give a description.
-
-Include a link to the website if one is available.
-
-### Results
-Explain the results/findings of the project.
-
-It's a good idea to include figures here to visualize the results.
+_Salmonella_ prevalence has reduced in U.S. raw poultry products since adopting prevalence-based _Salmonella_ performance standards, but human illnesses did not reduce proportionally. To determine better indicators of risk, we used Quantitative Microbial Risk Assessment (QMRA) to evaluate public health risks of raw chicken parts contaminated with different levels of (1) all _Salmonella_ and (2) _Salmonella_ serotypes of interest. Lognormal _Salmonella_ level distributions were fitted using data from 2012 USDA-FSIS Baseline Survey ("Baseline") and 2023 USDA-FSIS routine verification sampling ("HACCP") data. Three different dose-response (DR) models were used to explore the public health risk of _Salmonella_ levels and serotypes: (1) Single DR for all serotypes; (2) Reduced virulence for Kentucky; (3) Multiple serotype-specific DR models. All scenarios indicated concentrated risk in a relatively small proportion of products contaminated with high-levels of _Salmonella_. Our simplest approach using a single DR model with Baseline data (μ=-3.19, σ=1.29) showed that 68% and 37% of illnesses were attributed to the 0.7% and 0.06 % of products above 1 CFU/g and 10 CFU/g _Salmonella_, respectively. More recent HACCP data (μ=-4.85, σ=2.44) showed that 99.9% and 99.6% of illnesses were attributed to the 2.3% and 0.8 % of products above 1 CFU/g and 10 CFU/g _Salmonella_, respectively. The scenarios with serotype-specific DR models showed more concentrated risk at higher levels than the simpler approaches at all levels. Baseline data showed 91.5% and 63.7% and HACCP data showed >99.9% and 99.9% of illnesses were attributed to products above 1 and 10 CFU/g _Salmonella_, respectively. Regarding serotypes, 0.003% and 0.3% of illnesses were attributed to the 0.2% and 0.7% of products with > 1 CFU of Kentucky/g, while 69% and 78.7% of illnesses were attributed to the 0.3% and 1.2% of products above 1 CFU/g containing either Enteritidis, Infantis, or Typhimurium for Baseline and HACCP data, respectively. Our risk assessment suggests public health risk in chicken parts is concentrated in the small proportion of finished products contaminated with high-levels and specifically high-levels of high-risk serotypes. Low-risk serotypes, such as Kentucky, are predicted to contribute to extremely few human cases.
 
 ## Usage
 ### Data Generation
@@ -35,16 +27,11 @@ Data fitting was performed in [R 3.4.2](https://cloud.r-project.org/) and [RStud
 * Rmpfr
 
 ### Running
-Explain in detailed steps how to run the code in order to reproduce the results shown above in the results section.
+Risk models are located in data and /models/risk models.
 
-#### Step 1.
-Download all the input data.
+@Risk models can be run by launching the respective .xlsx file through Microsoft Office Excel and @Risk.
 
-#### Step 2.
-Generate the values for training the model.
-
-#### Step 3.
-Train the model.
+R models can be run by opening the Risk Model.Rproj file, followed by "Unified Risk Function.Rmd" and running the required code chunks.
 
 ## Authors
 You can view the list of authors in the [AUTHORS](/AUTHORS) file.
@@ -59,7 +46,7 @@ USA<br>
 [mstasie@illinois.edu](mailto:mstasie@illinois.edu)
 
 ## Citation
-Include citation here.
+TO DO: Update following publication
 
 ## License
 This project's code is licensed under the GNU General Public License v3.0 and dataset is licensed the Creative Commons Attribution Share Alike 4.0 International license. Please see the [LICENSE.code](/LICENSE.code) and [LICENSE.dataset](/LICENSE.dataset) files for details.
