@@ -1,0 +1,18 @@
+scenario,threshold,proportion_meeting_product_characteristic,number_of_servings_meeting_product_characteristic,average_p_ill,illness_proportion_from_characterized_product,scaling factor,No servings meeting described contamination
+Over the level threshold,0.007350239,8.62%,7751587591,2.34E-05,0.999999935,1.50E-07,7751587591
+Over the level threshold,1,1.25%,1122003618,1.62E-04,0.999962775,1.50E-07,1122003618
+Over the level threshold,10,0.40%,358053385,5.07E-04,0.999547699,1.50E-07,358053385
+Under the level threshold,0.007350239,91.38%,82217779322,1.26E-13,6.52E-08,1.50E-07,82217779322
+Under the level threshold,1,98.75%,88847363295,6.58E-11,3.72E-05,1.50E-07,88847363295
+Under the level threshold,10,99.60%,89611313528,7.76E-10,0.000452301,1.50E-07,89611313528
+Inclusion list&over the level threshold,0.007350239,4.42%,3976564586,3.65E-05,0.826054831,1.50E-07,3976564586
+Inclusion list&over the level threshold,1,0.64%,572743248,2.54E-04,0.82602753,1.50E-07,572743248
+Inclusion list&over the level threshold,10,0.20%,182585104.8,7.99E-04,0.825713975,1.50E-07,182585104.8
+Kentucky&over the level threshold,0.007350239,2.51%,2258091568,9.38E-08,0.001195513,1.50E-07,2258091568
+Kentucky&over the level threshold,1,0.37%,331269380.4,6.39E-07,0.001195513,1.50E-07,331269380.4
+Kentucky&over the level threshold,10,0.12%,106498523.7,1.95E-06,0.001195513,1.50E-07,106498523.7
+Not-Kentucky&over the level threshold,0.007350239,6.11%,5493496023,3.29E-05,0.998804422,1.50E-07,5493496023
+Not-Kentucky&over the level threshold,1,0.88%,790734237.7,2.30E-04,0.998767262,1.50E-07,790734237.7
+Not-Kentucky&over the level threshold,10,0.28%,251554861.3,7.21E-04,0.998352186,1.50E-07,251554861.3
+Baseline,NA,100.00%,89969366913,2.01E-06,1,1.50E-07,89969366913
+,,,,,,-6.823908741,

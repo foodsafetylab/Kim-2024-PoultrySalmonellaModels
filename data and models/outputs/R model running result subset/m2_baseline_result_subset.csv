@@ -1,0 +1,17 @@
+scenario,threshold,proportion_meeting_product_characteristic,number_of_servings_meeting_product_characteristic,average_p_ill,illness_proportion_from_characterized_product,Scaling factor
+Over the level threshold,0.007350239,0.2064795,18576829896,9.72E-06,0.984020505,0.00016
+Over the level threshold,1,0.006705,603244605.2,0.000208261,0.684334708,0.00016
+Over the level threshold,10,0.0005872,52830012.25,0.001311123,0.376294912,0.00016
+Under the level threshold,0.007350239,0.7935205,71392537018,4.10E-08,0.015979495,0.00016
+Under the level threshold,1,0.993295,89366122308,6.47E-07,0.315665292,0.00016
+Under the level threshold,10,0.9994128,89916536901,1.27E-06,0.623705088,0.00016
+Inclusion list&over the level threshold,0.007350239,0.1058424,9522573721,1.36E-05,0.706497932,0.00016
+Inclusion list&over the level threshold,1,0.0034514,310520273,0.000290905,0.492126756,0.00016
+Inclusion list&over the level threshold,10,0.0003068,27602601.77,0.001809579,0.271737114,0.00016
+Kentucky&over the level threshold,0.007350239,0.0602234,5418261171,3.39E-07,0.010028361,0.00016
+Kentucky&over the level threshold,1,0.0019379,174351636.1,7.22E-06,0.006850399,0.00016
+Kentucky&over the level threshold,10,0.0001703,15321783.19,4.42E-05,0.003674648,0.00016
+Not-Kentucky&over the level threshold,0.007350239,0.1462561,13158568724,1.36E-05,0.973992143,0.00016
+Not-Kentucky&over the level threshold,1,0.0047671,428892969,0.000289982,0.67748431,0.00016
+Not-Kentucky&over the level threshold,10,0.0004169,37508229.07,0.001827841,0.372620264,0.00016
+Baseline,NA,1,89969366913,2.04E-06,1,0.00016
