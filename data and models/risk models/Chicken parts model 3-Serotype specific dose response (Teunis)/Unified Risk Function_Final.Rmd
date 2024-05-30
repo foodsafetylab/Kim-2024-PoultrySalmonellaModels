@@ -1,0 +1,1433 @@
+---
+title: "Unified Risk Function"
+author: "Cecil Barnett-Neefs"
+date: "2023-11-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readxl)
+library(parallel)
+library(plyr)
+library(dplyr)
+library(MASS)
+library(BAS)
+library(Rmpfr)
+serotype_probabilities <- readxl::read_xlsx("Serotype_Probabilities.xlsx", sheet = "Sheet1") # HACCP 2015 - 2022 Parts
+tuenis_submodel_parameters <- readxl::read_xlsx("Tuenis_Submodel_Parameters.xlsx", sheet = "Sheet1")
+serotype_equivalents <- readxl::read_xlsx("Serotype_Equivalents.xlsx", sheet = "Sheet1")
+
+confidence_interval <- function(data, confidence = 0.95) {
+  mean_value <- mean(data)
+  n <- length(data)
+  stderr <- sd(data) / sqrt(n)
+  margin_of_error <- qt((1 + confidence) / 2, df = n - 1) * stderr
+  lower_bound <- mean_value - margin_of_error
+  upper_bound <- mean_value + margin_of_error
+  return(c(lower_bound, upper_bound))
+}
+
+pr_ill_from_dose <- function(dose, alpha, beta) {
+  return(1-(1+(dose/beta))^(-alpha))
+}
+
+get_table_values <- function(full_results_table) {
+  specific_table <- data.frame(
+    scenario = c(rep(c("Over the level threshold", "Under the level threshold", "Inclusion list&over the level threshold", "Kentucky&over the level threshold", "Not-Kentucky&over the level threshold"), each=3)),
+    threshold = rep(
+      c(
+        mean(full_results_table$microbial_threshold_1),
+        mean(full_results_table$microbial_threshold_2),
+        mean(full_results_table$microbial_threshold_3)
+      ),
+      5
+    ),
+    proportion_meeting_product_characteristic = c(
+      mean(full_results_table$proportion_noncompliant_with_mc_1, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_2, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_3, na.rm = TRUE),
+      mean(full_results_table$proportion_compliant_with_mc_1, na.rm = TRUE),
+      mean(full_results_table$proportion_compliant_with_mc_2, na.rm = TRUE),
+      mean(full_results_table$proportion_compliant_with_mc_3, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_1_inclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_2_inclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_3_inclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_1_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_2_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_3_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_1_not_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_2_not_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$proportion_noncompliant_with_mc_3_not_exclusion_list, na.rm = TRUE)
+    ),
+    number_of_servings_meeting_product_characteristic = c(
+      mean(full_results_table$number_of_servings_mc_1_noncompliant, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_2_noncompliant, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_3_noncompliant, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_1_compliant, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_2_compliant, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_3_compliant, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_1_noncompliant_and_from_inclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_2_noncompliant_and_from_inclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_3_noncompliant_and_from_inclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_1_noncompliant_and_from_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_2_noncompliant_and_from_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_3_noncompliant_and_from_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_1_noncompliant_and_from_not_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_2_noncompliant_and_from_not_exclusion_list, na.rm = TRUE),
+      mean(full_results_table$number_of_servings_mc_3_noncompliant_and_from_not_exclusion_list, na.rm = TRUE)
+    ),
+    average_p_ill = c(
+      mean(full_results_table$pr_ill_from_noncompliant_1_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_noncompliant_2_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_noncompliant_3_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_compliant_1_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_compliant_2_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_compliant_3_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_mean, na.rm = TRUE),
+      mean(full_results_table$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_mean, na.rm = TRUE)
+    ),
+    annual_predicted_illnesses = c(
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE),
+      mean(full_results_table$annual_predicted_illnesses, na.rm = TRUE)
+    ),
+    illness_proportion_from_characterized_product = c(
+      mean(full_results_table$illness_proportion_mc_1_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_mc_2_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_mc_3_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_mc_1_compliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_mc_2_compliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_mc_3_compliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_inclusion_list_and_level_based_mc_1_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_inclusion_list_and_level_based_mc_2_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_inclusion_list_and_level_based_mc_3_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_exclusion_list_and_level_based_mc_1_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_exclusion_list_and_level_based_mc_2_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_exclusion_list_and_level_based_mc_3_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_not_exclusion_list_and_level_based_mc_1_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_not_exclusion_list_and_level_based_mc_2_noncompliant, na.rm = TRUE),
+      mean(full_results_table$illness_proportion_from_not_exclusion_list_and_level_based_mc_3_noncompliant, na.rm = TRUE)
+    ),
+    overall_pr_ill_mean = c(
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE),
+      mean(full_results_table$overall_pr_ill_mean, na.rm = TRUE)
+    )
+  )
+  return(specific_table)
+}
+
+save_model_run <- function(model_output, path) {
+  write.csv(model_output, path, row.names = FALSE)
+}
+
+teunis_dose_response <- function(sample_size, sample_serotype, tuenis_submodel_parameters, serotype_equivalents, dose=1, debug=FALSE) {
+  
+  equivalent_serotype_row <- which(serotype_equivalents$selected_serotype==sample_serotype)
+  if (length(equivalent_serotype_row) > 0) {
+    if (debug==TRUE) {
+      print(paste0("Matched Serotype: ", sample_serotype)) 
+    }
+    equivalent_serotype <- serotype_equivalents$teunis_equivalent[equivalent_serotype_row]
+    tdr_parameter_row <- which(tuenis_submodel_parameters$serotype==equivalent_serotype)
+  } else {
+    if (debug==TRUE) {
+      print(paste0("No Matched Serotype")) 
+    }
+    equivalent_serotype <- c("Anatum", "Enteritidis", "Heidelberg", "Typhimurium")[sample(4,1)]
+    tdr_parameter_row <- which(tuenis_submodel_parameters$serotype==equivalent_serotype)
+    if (debug==TRUE) {
+      print(paste0("Randomly chose: ", equivalent_serotype)) 
+    }
+  }
+  
+  sample_1_mean_vector <- c(tuenis_submodel_parameters$sample_1_mean_vector_1[tdr_parameter_row], tuenis_submodel_parameters$sample_1_mean_vector_2[tdr_parameter_row])
+  if (debug==TRUE) {
+    print(paste0("sample_1_mean_vector: "))
+    print(sample_1_mean_vector)
+  }
+  sample_1_covariance_matrix <- base::matrix(
+    c(
+      c(
+        tuenis_submodel_parameters$sample_1_covariance_matrix_1[tdr_parameter_row],
+        tuenis_submodel_parameters$sample_1_covariance_matrix_2[tdr_parameter_row],
+        tuenis_submodel_parameters$sample_1_covariance_matrix_3[tdr_parameter_row],
+        tuenis_submodel_parameters$sample_1_covariance_matrix_4[tdr_parameter_row]
+        )
+      ),
+    ncol = 2
+    )
+  if (debug==TRUE) {
+    print(paste0("sample_1_covariance_matrix: "))
+    print(sample_1_covariance_matrix)
+  }
+  sample_2_mean_vector <- c(tuenis_submodel_parameters$sample_2_mean_vector_1[tdr_parameter_row], tuenis_submodel_parameters$sample_2_mean_vector_2[tdr_parameter_row])
+  if (debug==TRUE) {
+    print(paste0("sample_2_mean_vector: "))
+    print(sample_2_mean_vector)
+  }
+  sample_2_covariance_matrix <- base::matrix(
+    c(
+      c(
+        tuenis_submodel_parameters$sample_2_covariance_matrix_1[tdr_parameter_row],
+        tuenis_submodel_parameters$sample_2_covariance_matrix_2[tdr_parameter_row],
+        tuenis_submodel_parameters$sample_2_covariance_matrix_3[tdr_parameter_row],
+        tuenis_submodel_parameters$sample_2_covariance_matrix_4[tdr_parameter_row]
+        )
+      ),
+    ncol = 2
+    )
+  if (debug==TRUE) {
+    print(paste0("sample_2_covariance_matrix: "))
+    print(sample_2_covariance_matrix)
+  }
+  # Infection ----
+  # Create bivariate normal distribution
+  alpha_beta <- MASS::mvrnorm(
+    n = sample_size,
+    mu = sample_1_mean_vector, 
+    Sigma = sample_1_covariance_matrix
+  )
+  w1 <- alpha_beta[1]
+  z1 <- alpha_beta[2]
+  u1 <- exp(w1)/(1+exp(w1))
+  v1 <- exp(z1)
+  a <- u1*v1
+  b <- v1-a
+  # Calulate Probability of infection with hypergeometric model 
+  # infection_vector <- numeric(sample_size)
+  # for(i in 1:sample_size) {
+  #   infection_vector[i] <- 1-BAS::hypergeometric1F1(a[i], a[i]+b[i], -dose, log=FALSE)
+  # }
+  infection_vector <- 1-BAS::hypergeometric1F1(a, a+b, -dose, log=FALSE)
+  # Create bivariate normal distribution
+  gamma_eta <- MASS::mvrnorm(
+    n = sample_size,
+    mu = sample_2_mean_vector, 
+    Sigma = sample_2_covariance_matrix
+  )
+  # Calculate P(ill given inf) using beta-poisson model
+  w2 <- gamma_eta[1]
+  z2 <- gamma_eta[2]
+  u2 <- exp(w2)/(1+exp(w2))
+  v2 <- exp(z2)
+  r <- u2*v2
+  n <- v2-r
+  # Calculate conditional illness using beta-poisson model
+  # conditional_illness <- numeric(sample_size)
+  # for (i in 1:sample_size) {
+  #   conditional_illness[i] <- 1-((1+(dose/n[i]))^(-r[i]))
+  # }
+  # conditional_illness <- 1-((1+(dose/n))^(-r))
+  conditional_illness <- as.numeric(1-(1+Rmpfr::mpfr(dose/n, 360))^(-r))
+  
+  output <- data.frame(
+    equivalent_serotype=equivalent_serotype,
+    sample_size=sample_size,
+    dose=dose,
+    w1=w1,
+    z1=z1,
+    u1=u1,
+    v1=v1,
+    a=a,
+    b=b,
+    w2=w2,
+    z2=z2,
+    u2=u2,
+    v2=v2,
+    r=r,
+    n=n,
+    mean_infection_vector=(infection_vector),
+    mean_conditional_illness=(conditional_illness),
+    mean_pr_ill=(infection_vector*conditional_illness)
+  )
+  return(output)
+}
+
+poultry_model_clustered <- function(total_iterations, total_simulations, cores=detectCores(), model_mode, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, scaling_factor, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, annual_servings, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs=TRUE, use_scaling_factor=TRUE, comment="") {
+  print(paste0("started at: ", format(Sys.time(), "%Y-%m-%d %H-%M-%S")))
+  print(paste0("total_iterations=",total_iterations))
+  print(paste0("total_simulations=",total_simulations))
+  print(paste0("cores=",cores))
+  date_time <- format(Sys.time(), "%Y-%m-%d-%H-%M-%S_")
+  input_check <- TRUE
+  if (cores>detectCores()) {
+    cores <- detectCores()
+  } else if (cores<1) {
+    cores <- 1
+  }
+  
+  if (is.na(as.integer(model_mode))) {
+    print("Model mode error!")
+    input_check <- FALSE
+  } else if (as.integer(model_mode>3)) {
+    print("Model mode error!")
+    input_check <- FALSE
+  } else if (as.integer(model_mode<1)) {
+    print("Model mode error!")
+    input_check <- FALSE
+  }
+  
+  if (comment!="") {
+    comment <- paste0(comment, "_")  
+  }
+  
+  if (input_check==TRUE) {
+    i <- 1
+    while(i <= total_simulations) {
+      cl <- makeCluster(cores)
+      if (model_mode==3) {
+        clusterEvalQ(cl, c(library(MASS),library(BAS),library(Rmpfr)))
+      }
+      model_runs <- parLapply(cl, 1:total_iterations, poultry_model, total_iterations, model_mode, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, scaling_factor,  product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, use_scaling_factor)
+      stopCluster(cl)
+      
+      model_runs_tidy <- data.table::rbindlist(model_runs)
+      rm(model_runs)
+      gc()
+      model_runs_tidy <- model_runs_tidy %>%
+        distinct()
+      
+      if (any(model_runs_tidy$tdr_mean_pr_ill <= 0) & model_mode == 3) {
+        model_runs_tidy_errors <- model_runs_tidy[which(model_runs_tidy$tdr_mean_pr_ill <= 0),]
+        model_runs_tidy_clean <- model_runs_tidy[which(model_runs_tidy$tdr_mean_pr_ill > 0),]
+        tdr_errors <- TRUE
+      } else {
+        tdr_errors <- FALSE
+      }
+      
+      if (save_runs == TRUE) {
+        save_model_run(model_runs_tidy, paste0(getwd(), "/outputs/", paste0(date_time, comment, "M", model_mode, "_", as.character(sprintf("%.0E", total_iterations)),"_", i , "_of_", total_simulations, ".csv")))
+        if (tdr_errors) {
+          save_model_run(model_runs_tidy_errors, paste0(getwd(), "/outputs/", paste0(date_time, comment, "M", model_mode, "_", as.character(sprintf("%.0E", total_iterations)),"_", i , "_of_", total_simulations, "_errors.csv")))
+          save_model_run(model_runs_tidy_clean, paste0(getwd(), "/outputs/", paste0(date_time, comment, "M", model_mode, "_", as.character(sprintf("%.0E", total_iterations)),"_", i , "_of_", total_simulations, "_clean.csv")))
+        }
+      }
+      
+      if (tdr_errors) {
+        model_runs_tidy <- model_runs_tidy_clean
+      }
+      # Replace denominator with Tuenis-based mean if using Tuenis calculations
+      if (model_mode == 3) {
+        baseline <- mean(model_runs_tidy$tdr_mean_pr_ill, na.rm = TRUE)
+      } else {
+        baseline <- mean(model_runs_tidy$overall_pr_ill, na.rm = TRUE)
+      }
+      simulation_run <- data.frame(
+        simulation_number = i,
+        simulation_type = model_mode,
+        microbial_threshold_1 = mean(model_runs_tidy$microbial_threshold_1),
+        microbial_threshold_2 = mean(model_runs_tidy$microbial_threshold_2),
+        microbial_threshold_3 = mean(model_runs_tidy$microbial_threshold_3),
+        scaling_factor = mean(model_runs_tidy$scaling_factor),
+        # Baseline/Overall Pr Ill
+        overall_pr_ill_mean = mean(model_runs_tidy$overall_pr_ill, na.rm = TRUE),
+        overall_pr_ill_5th = quantile(model_runs_tidy$overall_pr_ill, probs = 0.05, na.rm = TRUE),
+        overall_pr_ill_95th = quantile(model_runs_tidy$overall_pr_ill, probs = 0.95, na.rm = TRUE),
+        # Baseline Log10
+        overall_pr_ill_log10_mean = mean(model_runs_tidy$overall_pr_ill_log10, na.rm = TRUE),
+        overall_pr_ill_log10_5th = quantile(model_runs_tidy$overall_pr_ill_log10, probs = 0.05, na.rm = TRUE),
+        overall_pr_ill_log10_95th = quantile(model_runs_tidy$overall_pr_ill_log10, probs = 0.95, na.rm = TRUE),
+        # Tuenis
+        tdr_mean_infection_vector = mean(model_runs_tidy$tdr_mean_infection_vector, na.rm = TRUE),
+        tdr_mean_conditional_illness = mean(model_runs_tidy$tdr_mean_conditional_illness, na.rm = TRUE),
+        tdr_mean_pr_ill = mean(model_runs_tidy$tdr_mean_pr_ill, na.rm = TRUE),
+        # T1 Proportions
+        proportion_noncompliant_with_mc_1 = mean(model_runs_tidy$is_level_above_threshold_1, na.rm = TRUE), # Proportion above threshold level
+        proportion_compliant_with_mc_1 = 1-mean(model_runs_tidy$is_level_above_threshold_1, na.rm = TRUE), # Proportion below threshold level
+        proportion_noncompliant_with_mc_1_inclusion_list = mean(model_runs_tidy$is_level_above_threshold_1_and_from_inclusion_list, na.rm = TRUE), # Proportion above threshold level, and serotype on inclusion list
+        proportion_noncompliant_with_mc_1_exclusion_list = mean(model_runs_tidy$is_level_above_threshold_1_and_from_exclusion_list, na.rm = TRUE), # Proportion Kentucky&over level threshold
+        proportion_noncompliant_with_mc_1_not_exclusion_list = mean(model_runs_tidy$is_serotype_above_threshold_1_and_from_not_exclusion_list, na.rm = TRUE), # Proportion not Kentucky&over the level threshold
+        # T1+Compliant/P(ill) from Level under the threshold
+        pr_ill_from_compliant_1_product_mean = mean(model_runs_tidy$pr_ill_from_compliant_1_product, na.rm = TRUE),
+        pr_ill_from_compliant_1_product_5th = quantile(model_runs_tidy$pr_ill_from_compliant_1_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_compliant_1_product_95th = quantile(model_runs_tidy$pr_ill_from_compliant_1_product, probs = 0.95, na.rm = TRUE),
+        # T1+Compliant Log10
+        pr_ill_from_compliant_1_product_log10_mean = mean(model_runs_tidy$pr_ill_from_compliant_1_product_log10, na.rm = TRUE),
+        pr_ill_from_compliant_1_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_compliant_1_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_compliant_1_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_compliant_1_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Noncompliant/P(ill) from Level over the threshold
+        pr_ill_from_noncompliant_1_product_mean = mean(model_runs_tidy$pr_ill_from_noncompliant_1_product, na.rm = TRUE),
+        pr_ill_from_noncompliant_1_product_5th = quantile(model_runs_tidy$pr_ill_from_noncompliant_1_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_noncompliant_1_product_95th = quantile(model_runs_tidy$pr_ill_from_noncompliant_1_product, probs = 0.95, na.rm = TRUE),
+        # T1+Noncompliant Log10
+        pr_ill_from_noncompliant_1_product_log10_mean = mean(model_runs_tidy$pr_ill_from_noncompliant_1_product_log10, na.rm = TRUE),
+        pr_ill_from_noncompliant_1_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_noncompliant_1_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_noncompliant_1_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_noncompliant_1_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Inclusion List+Compliant
+        pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T1+Inclusion List+Compliant Log10
+        pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Inclusion List+Noncompliant/P(ill) from Inclusion list & level over the threshold
+        pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T1+Inclusion List+Noncompliant Log10/P(ill) from Inclusion list & level over the threshold
+        pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Exclusion List+Compliant
+        pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T1+Exclusion List+Compliant Log10
+        pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Exclusion List+Noncompliant
+        pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T1+Exclusion List+Noncompliant Log10
+        pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Not Exclusion List+Compliant
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T1+Not Exclusion List+Compliant Log10
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T1+Not Exclusion List+Noncompliant/P(ill) from Serotype not Kentucky & level over the threshold
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T1+Not Exclusion List+Noncompliant Log10/P(ill) from Serotype not Kentucky & level over the threshold
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        
+        # T2 Proportions
+        proportion_noncompliant_with_mc_2 = mean(model_runs_tidy$is_level_above_threshold_2, na.rm = TRUE), # Proportion above threshold level
+        proportion_compliant_with_mc_2 = 1-mean(model_runs_tidy$is_level_above_threshold_2, na.rm = TRUE), # Proportion below threshold level
+        proportion_noncompliant_with_mc_2_inclusion_list = mean(model_runs_tidy$is_level_above_threshold_2_and_from_inclusion_list, na.rm = TRUE), # Proportion above threshold level, and serotype on inclusion list
+        proportion_noncompliant_with_mc_2_exclusion_list = mean(model_runs_tidy$is_level_above_threshold_2_and_from_exclusion_list, na.rm = TRUE), # Proportion Kentucky&over level threshold
+        proportion_noncompliant_with_mc_2_not_exclusion_list = mean(model_runs_tidy$is_serotype_above_threshold_2_and_from_not_exclusion_list, na.rm = TRUE), # Proportion not Kentucky&over the level threshold
+        # T2+Compliant/P(ill) from Level under the threshold
+        pr_ill_from_compliant_2_product_mean = mean(model_runs_tidy$pr_ill_from_compliant_2_product, na.rm = TRUE),
+        pr_ill_from_compliant_2_product_5th = quantile(model_runs_tidy$pr_ill_from_compliant_2_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_compliant_2_product_95th = quantile(model_runs_tidy$pr_ill_from_compliant_2_product, probs = 0.95, na.rm = TRUE),
+        # T2+Compliant Log10
+        pr_ill_from_compliant_2_product_log10_mean = mean(model_runs_tidy$pr_ill_from_compliant_2_product_log10, na.rm = TRUE),
+        pr_ill_from_compliant_2_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_compliant_2_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_compliant_2_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_compliant_2_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Noncompliant/P(ill) from Level over the threshold
+        pr_ill_from_noncompliant_2_product_mean = mean(model_runs_tidy$pr_ill_from_noncompliant_2_product, na.rm = TRUE),
+        pr_ill_from_noncompliant_2_product_5th = quantile(model_runs_tidy$pr_ill_from_noncompliant_2_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_noncompliant_2_product_95th = quantile(model_runs_tidy$pr_ill_from_noncompliant_2_product, probs = 0.95, na.rm = TRUE),
+        # T2+Noncompliant Log10
+        pr_ill_from_noncompliant_2_product_log10_mean = mean(model_runs_tidy$pr_ill_from_noncompliant_2_product_log10, na.rm = TRUE),
+        pr_ill_from_noncompliant_2_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_noncompliant_2_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_noncompliant_2_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_noncompliant_2_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Inclusion List+Compliant
+        pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T2+Inclusion List+Compliant Log10
+        pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Inclusion List+Noncompliant/P(ill) from Inclusion list & level over the threshold
+        pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T2+Inclusion List+Noncompliant Log10/P(ill) from Inclusion list & level over the threshold
+        pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Exclusion List+Compliant
+        pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T2+Exclusion List+Compliant Log10
+        pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Exclusion List+Noncompliant/P(ill) from Serotype Kentucky & level over the threshold
+        pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T2+Exclusion List+Noncompliant Log10/P(ill) from Serotype Kentucky & level over the threshold
+        pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Not Exclusion List+Compliant
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T2+Not Exclusion List+Compliant Log10
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T2+Not Exclusion List+Noncompliant/P(ill) from Serotype not Kentucky & level over the threshold
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T2+Not Exclusion List+Noncompliant Log10/P(ill) from Serotype not Kentucky & level over the threshold
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        
+        # T3 Proportions
+        proportion_noncompliant_with_mc_3 = mean(model_runs_tidy$is_level_above_threshold_3, na.rm = TRUE), # Proportion above threshold level
+        proportion_compliant_with_mc_3 = 1-mean(model_runs_tidy$is_level_above_threshold_3, na.rm = TRUE), # Proportion below threshold level
+        proportion_noncompliant_with_mc_3_inclusion_list = mean(model_runs_tidy$is_level_above_threshold_3_and_from_inclusion_list, na.rm = TRUE), # Proportion above threshold level, and serotype on inclusion list
+        proportion_noncompliant_with_mc_3_exclusion_list = mean(model_runs_tidy$is_level_above_threshold_3_and_from_exclusion_list, na.rm = TRUE), # Proportion Kentucky&over level threshold
+        proportion_noncompliant_with_mc_3_not_exclusion_list = mean(model_runs_tidy$is_serotype_above_threshold_3_and_from_not_exclusion_list, na.rm = TRUE), # Proportion not Kentucky&over the level threshold
+        # T3+Compliant/P(ill) from Level under the threshold
+        pr_ill_from_compliant_3_product_mean = mean(model_runs_tidy$pr_ill_from_compliant_3_product, na.rm = TRUE),
+        pr_ill_from_compliant_3_product_5th = quantile(model_runs_tidy$pr_ill_from_compliant_3_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_compliant_3_product_95th = quantile(model_runs_tidy$pr_ill_from_compliant_3_product, probs = 0.95, na.rm = TRUE),
+        # T3+Compliant Log10
+        pr_ill_from_compliant_3_product_log10_mean = mean(model_runs_tidy$pr_ill_from_compliant_3_product_log10, na.rm = TRUE),
+        pr_ill_from_compliant_3_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_compliant_3_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_compliant_3_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_compliant_3_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Noncompliant/P(ill) from Level over the threshold
+        pr_ill_from_noncompliant_3_product_mean = mean(model_runs_tidy$pr_ill_from_noncompliant_3_product, na.rm = TRUE),
+        pr_ill_from_noncompliant_3_product_5th = quantile(model_runs_tidy$pr_ill_from_noncompliant_3_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_noncompliant_3_product_95th = quantile(model_runs_tidy$pr_ill_from_noncompliant_3_product, probs = 0.95, na.rm = TRUE),
+        # T3+Noncompliant Log10
+        pr_ill_from_noncompliant_3_product_log10_mean = mean(model_runs_tidy$pr_ill_from_noncompliant_3_product_log10, na.rm = TRUE),
+        pr_ill_from_noncompliant_3_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_noncompliant_3_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_noncompliant_3_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_noncompliant_3_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Inclusion List+Compliant
+        pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T3+Inclusion List+Compliant Log10
+        pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Inclusion List+Noncompliant/P(ill) from Inclusion list & level over the threshold
+        pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T3+Inclusion List+Noncompliant Log10/P(ill) from Inclusion list & level over the threshold
+        pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Exclusion List+Compliant
+        pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T3+Exclusion List+Compliant Log10
+        pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Exclusion List+Noncompliant/P(ill) from Serotype Kentucky & level over the threshold
+        pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T3+Exclusion List+Noncompliant Log10/P(ill) from Serotype Kentucky & level over the threshold
+        pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Not Exclusion List+Compliant
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product, probs = 0.95, na.rm = TRUE),
+        # T3+Not Exclusion List+Compliant Log10
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # T3+Not Exclusion List+Noncompliant/P(ill) from Serotype not Kentucky & level over the threshold
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product, probs = 0.95, na.rm = TRUE),
+        # T3+Not Exclusion List+Noncompliant Log10/P(ill) from Serotype not Kentucky & level over the threshold
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10_mean = mean(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10_5th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10, probs = 0.05, na.rm = TRUE),
+        pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10_95th = quantile(model_runs_tidy$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10, probs = 0.95, na.rm = TRUE),
+        # Risk
+        no_threshold_mean_relative_risk = baseline/baseline,
+        stringsAsFactors=FALSE
+      )
+      simulation_run$pr_ill_from_compliant_1_product_mean_relative_risk <- simulation_run$pr_ill_from_compliant_1_product_mean/baseline
+      simulation_run$pr_ill_from_compliant_2_product_mean_relative_risk <- simulation_run$pr_ill_from_compliant_2_product_mean/baseline
+      simulation_run$pr_ill_from_compliant_3_product_mean_relative_risk <- simulation_run$pr_ill_from_compliant_3_product_mean/baseline
+      # P(ill) from Level over the threshold-Relative Risk
+      simulation_run$pr_ill_from_noncompliant_1_product_mean_relative_risk <- simulation_run$pr_ill_from_noncompliant_1_product_mean/baseline
+      simulation_run$pr_ill_from_noncompliant_2_product_mean_relative_risk <- simulation_run$pr_ill_from_noncompliant_2_product_mean/baseline
+      simulation_run$pr_ill_from_noncompliant_3_product_mean_relative_risk <- simulation_run$pr_ill_from_noncompliant_3_product_mean/baseline
+      # P(ill) from Inclusion list & level over the threshold-Relative Risk
+      simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_relative_risk <- simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_mean/baseline
+      simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_relative_risk <- simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_mean/baseline
+      simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_relative_risk <- simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_mean/baseline
+      # P(ill) from Not Exclusion List+Compliant
+      simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_relative_risk <- simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_mean/baseline
+      simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_relative_risk <- simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_mean/baseline
+      simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_relative_risk <- simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_mean/baseline
+      # P(ill) from Not Exclusion List+Noncompliant
+      simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_relative_risk <- simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_mean/baseline
+      simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_relative_risk <- simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_mean/baseline
+      simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_relative_risk <- simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_mean/baseline
+      
+      simulation_run$annual_servings <- annual_servings
+      simulation_run$annual_predicted_illnesses <- annual_servings*baseline
+      
+      # Over the level threshold
+      simulation_run$number_of_servings_mc_1_noncompliant <- annual_servings*simulation_run$proportion_noncompliant_with_mc_1
+      simulation_run$number_of_servings_mc_2_noncompliant <- annual_servings*simulation_run$proportion_noncompliant_with_mc_2
+      simulation_run$number_of_servings_mc_3_noncompliant <- annual_servings*simulation_run$proportion_noncompliant_with_mc_3
+      # Under the level threshold
+      simulation_run$number_of_servings_mc_1_compliant <- annual_servings*simulation_run$proportion_compliant_with_mc_1
+      simulation_run$number_of_servings_mc_2_compliant <- annual_servings*simulation_run$proportion_compliant_with_mc_2
+      simulation_run$number_of_servings_mc_3_compliant <- annual_servings*simulation_run$proportion_compliant_with_mc_3
+      # Inclusion list&over the level threshold
+      simulation_run$number_of_servings_mc_1_noncompliant_and_from_inclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_1_inclusion_list
+      simulation_run$number_of_servings_mc_2_noncompliant_and_from_inclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_2_inclusion_list
+      simulation_run$number_of_servings_mc_3_noncompliant_and_from_inclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_3_inclusion_list
+      # Kentucky&over the level threshold
+      simulation_run$number_of_servings_mc_1_noncompliant_and_from_exclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_1_exclusion_list
+      simulation_run$number_of_servings_mc_2_noncompliant_and_from_exclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_2_exclusion_list
+      simulation_run$number_of_servings_mc_3_noncompliant_and_from_exclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_3_exclusion_list
+      # Not-Kentucky&over the level threshold
+      simulation_run$number_of_servings_mc_1_noncompliant_and_from_not_exclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_1_not_exclusion_list
+      simulation_run$number_of_servings_mc_2_noncompliant_and_from_not_exclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_2_not_exclusion_list
+      simulation_run$number_of_servings_mc_3_noncompliant_and_from_not_exclusion_list <- annual_servings*simulation_run$proportion_noncompliant_with_mc_3_not_exclusion_list
+      # illness proportion from the product characterized (relative risk)
+      # Over the level threshold
+      simulation_run$illness_proportion_mc_1_noncompliant <- simulation_run$number_of_servings_mc_1_noncompliant*simulation_run$pr_ill_from_noncompliant_1_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_mc_2_noncompliant <- simulation_run$number_of_servings_mc_2_noncompliant*simulation_run$pr_ill_from_noncompliant_2_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_mc_3_noncompliant <- simulation_run$number_of_servings_mc_3_noncompliant*simulation_run$pr_ill_from_noncompliant_3_product_mean/simulation_run$annual_predicted_illnesses
+      # Under the level threshold
+      simulation_run$illness_proportion_mc_1_compliant <- simulation_run$number_of_servings_mc_1_compliant*simulation_run$pr_ill_from_compliant_1_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_mc_2_compliant <- simulation_run$number_of_servings_mc_2_compliant*simulation_run$pr_ill_from_compliant_2_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_mc_3_compliant <- simulation_run$number_of_servings_mc_3_compliant*simulation_run$pr_ill_from_compliant_3_product_mean/simulation_run$annual_predicted_illnesses
+      # Inclusion list&over the level threshold
+      simulation_run$illness_proportion_from_inclusion_list_and_level_based_mc_1_noncompliant <- simulation_run$number_of_servings_mc_1_noncompliant_and_from_inclusion_list*simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_from_inclusion_list_and_level_based_mc_2_noncompliant <- simulation_run$number_of_servings_mc_2_noncompliant_and_from_inclusion_list*simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_from_inclusion_list_and_level_based_mc_3_noncompliant <- simulation_run$number_of_servings_mc_3_noncompliant_and_from_inclusion_list*simulation_run$pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      # Kentucky&over the level threshold
+      simulation_run$illness_proportion_from_exclusion_list_and_level_based_mc_1_noncompliant <- simulation_run$number_of_servings_mc_1_noncompliant_and_from_exclusion_list*simulation_run$pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_from_exclusion_list_and_level_based_mc_2_noncompliant <- simulation_run$number_of_servings_mc_2_noncompliant_and_from_exclusion_list*simulation_run$pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_from_exclusion_list_and_level_based_mc_3_noncompliant <- simulation_run$number_of_servings_mc_3_noncompliant_and_from_exclusion_list*simulation_run$pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      # Not-Kentucky&over the level threshold
+      simulation_run$illness_proportion_from_not_exclusion_list_and_level_based_mc_1_noncompliant <- simulation_run$number_of_servings_mc_1_noncompliant_and_from_not_exclusion_list*simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_from_not_exclusion_list_and_level_based_mc_2_noncompliant <- simulation_run$number_of_servings_mc_2_noncompliant_and_from_not_exclusion_list*simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      simulation_run$illness_proportion_from_not_exclusion_list_and_level_based_mc_3_noncompliant <- simulation_run$number_of_servings_mc_3_noncompliant_and_from_not_exclusion_list*simulation_run$pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_mean/simulation_run$annual_predicted_illnesses
+      if (i==1) {
+        results <- simulation_run
+      } else {
+        results <- base::rbind(results, simulation_run)
+      }
+      print(paste0(i, " of ", total_simulations))
+      i <- i+1
+    }
+    rownames(results) <- seq(1, dim(results)[1])
+    print(paste0("finished at: ", format(Sys.time(), "%Y-%m-%d %H-%M-%S")))
+    results_subset <- get_table_values(results)
+    save_model_run(results_subset, paste0(getwd(), "/outputs/", paste0(date_time, comment, "M", model_mode, "_", as.character(sprintf("%.0E", total_iterations)),"_", "results_subset", ".csv"))) 
+    return(results)
+  } else {
+    print("Input failure, model not run")
+  }
+}
+
+poultry_model <- function(i, total_iterations, model_mode, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, scaling_factor, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, use_scaling_factor=TRUE) {
+  microbial_threshold <- list(T1=1/(30*(1814/400)), T2=1, T3=10)
+  serotype_inclusion_list <- c("Typhimurium", "Enteritidis", "Infantis")
+  serotype_exclusion_list <- c("Kentucky")
+  # Salmonella Levels - From Censored Data Fit ----
+  salmonella_serving_level <- rnorm(1, salmonella_mean, salmonella_st_dev) # Williams & Ebel at al. 2012
+  # Salmonella Serotype ----
+  serotype_in_serving <- serotype_probabilities$Serotype[sample(seq_len(nrow(serotype_probabilities)), 1, prob = serotype_probabilities$Probability)]
+  # Product Standard Module ----
+  ## Level-based Standard ----
+  salmonella_level_in_serving <- 10^salmonella_serving_level
+  # T1
+  if (salmonella_level_in_serving > microbial_threshold$T1) {
+    is_level_above_threshold_1 <- TRUE
+  } else {
+    is_level_above_threshold_1 <- FALSE
+  }
+  # T2
+  if (salmonella_level_in_serving > microbial_threshold$T2) {
+    is_level_above_threshold_2 <- TRUE
+  } else {
+    is_level_above_threshold_2 <- FALSE
+  }
+  # T3
+  if (salmonella_level_in_serving > microbial_threshold$T3) {
+    is_level_above_threshold_3 <- TRUE
+  } else {
+    is_level_above_threshold_3 <- FALSE
+  }
+  ## Serotype-based Standard ----
+  # Inclusion List
+  is_serotype_on_inclusion_list <- any(grepl(serotype_in_serving, serotype_inclusion_list)) # Is serotype on Inclusion List
+  is_level_above_threshold_1_and_from_inclusion_list <- as.logical(is_level_above_threshold_1*is_serotype_on_inclusion_list) # Is level above threshold AND from inclusion list subtype?
+  is_level_above_threshold_2_and_from_inclusion_list <- as.logical(is_level_above_threshold_2*is_serotype_on_inclusion_list) # Is level above threshold AND from inclusion list subtype?
+  is_level_above_threshold_3_and_from_inclusion_list <- as.logical(is_level_above_threshold_3*is_serotype_on_inclusion_list) # Is level above threshold AND from inclusion list subtype?
+  # Exclusion List
+  is_serotype_on_exclusion_list <- any(grepl(serotype_in_serving, serotype_exclusion_list)) # Is serotype on Exclusion List(=Kentucky)?
+  is_level_above_threshold_1_and_from_exclusion_list <- as.logical(is_level_above_threshold_1*is_serotype_on_exclusion_list) # Is level above threshold AND serotype Kentucky?
+  is_level_above_threshold_2_and_from_exclusion_list <- as.logical(is_level_above_threshold_2*is_serotype_on_exclusion_list) # Is level above threshold AND serotype Kentucky?
+  is_level_above_threshold_3_and_from_exclusion_list <- as.logical(is_level_above_threshold_3*is_serotype_on_exclusion_list) # Is level above threshold AND serotype Kentucky?
+
+  is_serotype_not_on_exclusion_list <- !is_serotype_on_exclusion_list # Is serotype on Not Exclusion List(=Kentucky)?
+  is_serotype_above_threshold_1_and_from_not_exclusion_list <- as.logical(is_level_above_threshold_1*is_serotype_not_on_exclusion_list) # Is level above threshold AND from subtype not on exclusion list?
+  is_serotype_above_threshold_2_and_from_not_exclusion_list <- as.logical(is_level_above_threshold_2*is_serotype_not_on_exclusion_list) # Is level above threshold AND from subtype not on exclusion list?
+  is_serotype_above_threshold_3_and_from_not_exclusion_list <- as.logical(is_level_above_threshold_3*is_serotype_not_on_exclusion_list) # Is level above threshold AND from subtype not on exclusion list?
+
+  # Consumption Module ----
+  product_porition_size_log <- rnorm(1, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev) # CDC 2016, Lambertini  et al. (2019)
+  product_porition_size <- 10^product_porition_size_log
+  ## Total Dose ----
+  dose_in_one_raw_serving <- salmonella_level_in_serving*product_porition_size
+  # T1
+  if (is_level_above_threshold_1) {
+    mc_threshold_1_compliant_dose <- NA
+    mc_threshold_1_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    mc_threshold_1_compliant_dose <- dose_in_one_raw_serving
+    mc_threshold_1_noncompliant_dose <- NA
+  }
+  # T1+Inclusion List
+  if (is_level_above_threshold_1_and_from_inclusion_list) {
+    inclusion_list_and_level_based_mc_1_compliant_dose <- NA
+    inclusion_list_and_level_based_mc_1_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    inclusion_list_and_level_based_mc_1_compliant_dose <- dose_in_one_raw_serving
+    inclusion_list_and_level_based_mc_1_noncompliant_dose <- NA
+  }
+  # T1+Exclusion List
+  if (is_level_above_threshold_1_and_from_exclusion_list) {
+    exclusion_list_and_level_based_mc_1_compliant_dose <- NA
+    exclusion_list_and_level_based_mc_1_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    exclusion_list_and_level_based_mc_1_compliant_dose <- dose_in_one_raw_serving
+    exclusion_list_and_level_based_mc_1_noncompliant_dose <- NA
+  }
+  # T1+Not Exclusion List
+  if (is_serotype_above_threshold_1_and_from_not_exclusion_list) {
+    not_exclusion_list_and_level_based_mc_1_compliant_dose <- NA
+    not_exclusion_list_and_level_based_mc_1_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    not_exclusion_list_and_level_based_mc_1_compliant_dose <- dose_in_one_raw_serving
+    not_exclusion_list_and_level_based_mc_1_noncompliant_dose <- NA
+  }
+  
+  # T2
+  if (is_level_above_threshold_2) {
+    mc_threshold_2_compliant_dose <- NA
+    mc_threshold_2_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    mc_threshold_2_compliant_dose <- dose_in_one_raw_serving
+    mc_threshold_2_noncompliant_dose <- NA
+  }
+  # T2+Inclusion List
+  if (is_level_above_threshold_2_and_from_inclusion_list) {
+    inclusion_list_and_level_based_mc_2_compliant_dose <- NA
+    inclusion_list_and_level_based_mc_2_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    inclusion_list_and_level_based_mc_2_compliant_dose <- dose_in_one_raw_serving
+    inclusion_list_and_level_based_mc_2_noncompliant_dose <- NA
+  }
+  # T2+Exclusion List
+  if (is_level_above_threshold_2_and_from_exclusion_list) {
+    exclusion_list_and_level_based_mc_2_compliant_dose <- NA
+    exclusion_list_and_level_based_mc_2_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    exclusion_list_and_level_based_mc_2_compliant_dose <- dose_in_one_raw_serving
+    exclusion_list_and_level_based_mc_2_noncompliant_dose <- NA
+  }
+  # T2+Not Exclusion List
+  if (is_serotype_above_threshold_2_and_from_not_exclusion_list) {
+    not_exclusion_list_and_level_based_mc_2_compliant_dose <- NA
+    not_exclusion_list_and_level_based_mc_2_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    not_exclusion_list_and_level_based_mc_2_compliant_dose <- dose_in_one_raw_serving
+    not_exclusion_list_and_level_based_mc_2_noncompliant_dose <- NA
+  }
+  # T3
+  if (is_level_above_threshold_3) {
+    mc_threshold_3_compliant_dose <- NA
+    mc_threshold_3_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    mc_threshold_3_compliant_dose <- dose_in_one_raw_serving
+    mc_threshold_3_noncompliant_dose <- NA
+  }
+  # T3+Inclusion List
+  if (is_level_above_threshold_3_and_from_inclusion_list) {
+    inclusion_list_and_level_based_mc_3_compliant_dose <- NA
+    inclusion_list_and_level_based_mc_3_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    inclusion_list_and_level_based_mc_3_compliant_dose <- dose_in_one_raw_serving
+    inclusion_list_and_level_based_mc_3_noncompliant_dose <- NA
+  }
+  # T3+Exclusion List
+  if (is_level_above_threshold_3_and_from_exclusion_list) {
+    exclusion_list_and_level_based_mc_3_compliant_dose <- NA
+    exclusion_list_and_level_based_mc_3_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    exclusion_list_and_level_based_mc_3_compliant_dose <- dose_in_one_raw_serving
+    exclusion_list_and_level_based_mc_3_noncompliant_dose <- NA
+  }
+  # T3+Not Exclusion List
+  if (is_serotype_above_threshold_3_and_from_not_exclusion_list) {
+    not_exclusion_list_and_level_based_mc_3_compliant_dose <- NA
+    not_exclusion_list_and_level_based_mc_3_noncompliant_dose <- dose_in_one_raw_serving
+  } else {
+    not_exclusion_list_and_level_based_mc_3_compliant_dose <- dose_in_one_raw_serving
+    not_exclusion_list_and_level_based_mc_3_noncompliant_dose <- NA
+  }
+  if (use_scaling_factor) {
+    scaling_factor <- scaling_factor
+  } else {
+    scaling_factor <- 1
+  }
+  ## Dose with scaling factor ----
+  dose_exposed_to_host_post_scaled <- scaling_factor*dose_in_one_raw_serving
+  
+  # Dose Response Module ----
+  if (model_mode==1) {
+    # NOTE. WHO/FAO assume everyone infected gets ill (Pill|inf=1); and uses same Beta-Poisson, just lists variables as alpha and beta WHO/FAO (2002)
+    whofao_alpha <- 0.1324
+    whofao_beta <- 51.45
+    serving_alpha <- whofao_alpha
+    serving_beta <- whofao_beta
+    tdr <- list(
+      equivalent_serotype = NA,
+      sample_size=NA,
+      dose=NA,
+      w1=NA,
+      z1=NA,
+      u1=NA,
+      v1=NA,
+      a=NA,
+      b=NA,
+      w2=NA,
+      z2=NA,
+      u2=NA,
+      v2=NA,
+      r=NA,
+      n=NA,
+      mean_infection_vector = NA,
+      mean_conditional_illness = NA,
+      mean_pr_ill = NA
+    )
+  } else if (model_mode==2) {
+    # NOTE. WHO/FAO assume everyone infected gets ill (Pill|inf=1); and uses same Beta-Poisson, just lists variables as alpha and beta WHO/FAO (2002)
+    whofao_alpha <- 0.1324
+    whofao_beta <- 51.45
+    # https://qmrawiki.org/experiments/salmonella-anatum
+    anatum_alpha <- 0.318
+    anatum_beta <- 4729.90
+    if (serotype_in_serving=="Kentucky") {
+      serving_alpha <- anatum_alpha
+      serving_beta <- anatum_beta
+    } else {
+      serving_alpha <- whofao_alpha
+      serving_beta <- whofao_beta
+    }
+    tdr <- list(
+      equivalent_serotype = NA,
+      sample_size=NA,
+      dose=NA,
+      w1=NA,
+      z1=NA,
+      u1=NA,
+      v1=NA,
+      a=NA,
+      b=NA,
+      w2=NA,
+      z2=NA,
+      u2=NA,
+      v2=NA,
+      r=NA,
+      n=NA,
+      mean_infection_vector = NA,
+      mean_conditional_illness = NA,
+      mean_pr_ill = NA
+    )
+  } else if (model_mode==3) {
+    # Tuenis ----
+    tdr <- teunis_dose_response(1, serotype_in_serving, tuenis_submodel_parameters, serotype_equivalents, dose_exposed_to_host_post_scaled)
+  }
+  
+  # T1+Compliant
+  mc_threshold_1_compliant_dose_scaled <- scaling_factor*mc_threshold_1_compliant_dose
+  # T1+Noncompliant
+  mc_threshold_1_noncompliant_dose_scaled <- scaling_factor*mc_threshold_1_noncompliant_dose
+  # T1+Inclusion List+Compliant
+  inclusion_list_and_level_based_mc_1_compliant_dose_scaled <- scaling_factor*inclusion_list_and_level_based_mc_1_compliant_dose
+  # T1+Inclusion List+Noncompliant
+  inclusion_list_and_level_based_mc_1_noncompliant_dose_scaled <- scaling_factor*inclusion_list_and_level_based_mc_1_noncompliant_dose
+  # T1+Exclusion List+Compliant
+  exclusion_list_and_level_based_mc_1_compliant_dose_scaled <- scaling_factor*exclusion_list_and_level_based_mc_1_compliant_dose
+  # T1+Exclusion List+Noncompliant
+  exclusion_list_and_level_based_mc_1_noncompliant_dose_scaled <- scaling_factor*exclusion_list_and_level_based_mc_1_noncompliant_dose
+  # T1+Not Exclusion List+Compliant
+  not_exclusion_list_and_level_based_mc_1_compliant_dose_scaled <- scaling_factor*not_exclusion_list_and_level_based_mc_1_compliant_dose
+  # T1+Not Exclusion List+Noncompliant
+  not_exclusion_list_and_level_based_mc_1_noncompliant_dose_scaled <- scaling_factor*not_exclusion_list_and_level_based_mc_1_noncompliant_dose
+  
+  # T2+Compliant
+  mc_threshold_2_compliant_dose_scaled <- scaling_factor*mc_threshold_2_compliant_dose
+  # T2+Noncompliant
+  mc_threshold_2_noncompliant_dose_scaled <- scaling_factor*mc_threshold_2_noncompliant_dose
+  # T2+Inclusion List+Compliant
+  inclusion_list_and_level_based_mc_2_compliant_dose_scaled <- scaling_factor*inclusion_list_and_level_based_mc_2_compliant_dose
+  # T2+Inclusion List+Noncompliant
+  inclusion_list_and_level_based_mc_2_noncompliant_dose_scaled <- scaling_factor*inclusion_list_and_level_based_mc_2_noncompliant_dose
+  # T2+Exclusion List+Compliant
+  exclusion_list_and_level_based_mc_2_compliant_dose_scaled <- scaling_factor*exclusion_list_and_level_based_mc_2_compliant_dose
+  # T2+Exclusion List+Noncompliant
+  exclusion_list_and_level_based_mc_2_noncompliant_dose_scaled <- scaling_factor*exclusion_list_and_level_based_mc_2_noncompliant_dose
+  # T2+Not Exclusion List+Compliant
+  not_exclusion_list_and_level_based_mc_2_compliant_dose_scaled <- scaling_factor*not_exclusion_list_and_level_based_mc_2_compliant_dose
+  # T2+Not Exclusion List+Noncompliant
+  not_exclusion_list_and_level_based_mc_2_noncompliant_dose_scaled <- scaling_factor*not_exclusion_list_and_level_based_mc_2_noncompliant_dose
+  
+  # T3+Compliant
+  mc_threshold_3_compliant_dose_scaled <- scaling_factor*mc_threshold_3_compliant_dose
+  # T3+Noncompliant
+  mc_threshold_3_noncompliant_dose_scaled <- scaling_factor*mc_threshold_3_noncompliant_dose
+  # T3+Inclusion List+Compliant
+  inclusion_list_and_level_based_mc_3_compliant_dose_scaled <- scaling_factor*inclusion_list_and_level_based_mc_3_compliant_dose
+  # T3+Inclusion List+Noncompliant
+  inclusion_list_and_level_based_mc_3_noncompliant_dose_scaled <- scaling_factor*inclusion_list_and_level_based_mc_3_noncompliant_dose
+  # T3+Exclusion List+Compliant
+  exclusion_list_and_level_based_mc_3_compliant_dose_scaled <- scaling_factor*exclusion_list_and_level_based_mc_3_compliant_dose
+  # T3+Exclusion List+Noncompliant
+  exclusion_list_and_level_based_mc_3_noncompliant_dose_scaled <- scaling_factor*exclusion_list_and_level_based_mc_3_noncompliant_dose
+  # T3+Not Exclusion List+Compliant
+  not_exclusion_list_and_level_based_mc_3_compliant_dose_scaled <- scaling_factor*not_exclusion_list_and_level_based_mc_3_compliant_dose
+  # T3+Not Exclusion List+Noncompliant
+  not_exclusion_list_and_level_based_mc_3_noncompliant_dose_scaled <- scaling_factor*not_exclusion_list_and_level_based_mc_3_noncompliant_dose
+  
+  ## Probability of illness calculated with no threshold (after scaling factor) ----
+  if (model_mode==1 | model_mode==2) {
+    overall_pr_ill <- pr_ill_from_dose(dose_exposed_to_host_post_scaled, serving_alpha, serving_beta) # M1 and M2
+  } else {
+    overall_pr_ill <- NA # M3 uses tdr$mean_pr_ill
+  }
+  overall_pr_ill_log10 <- log10(overall_pr_ill)
+  ## Probability of Illness based on Microbial Compliance ----
+  # T1+Compliant
+  if (model_mode==3) {
+    if (!is.na(mc_threshold_1_compliant_dose_scaled)) {
+      pr_ill_from_compliant_1_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_compliant_1_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_compliant_1_product <- pr_ill_from_dose(mc_threshold_1_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_compliant_1_product_log10 <- log10(pr_ill_from_compliant_1_product)
+  # T1+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(mc_threshold_1_noncompliant_dose_scaled)) {
+      pr_ill_from_noncompliant_1_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_noncompliant_1_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_noncompliant_1_product <- pr_ill_from_dose(mc_threshold_1_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_noncompliant_1_product_log10 <- log10(pr_ill_from_noncompliant_1_product)
+  # T1+Inclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(inclusion_list_and_level_based_mc_1_compliant_dose_scaled)) {
+      pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product <- pr_ill_from_dose(inclusion_list_and_level_based_mc_1_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10 <- log10(pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product)
+  # T1+Inclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(inclusion_list_and_level_based_mc_1_noncompliant_dose_scaled)) {
+      pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product <- pr_ill_from_dose(inclusion_list_and_level_based_mc_1_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10 <- log10(pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product)
+  # T1+Exclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(exclusion_list_and_level_based_mc_1_compliant_dose_scaled)) {
+      pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product <- pr_ill_from_dose(exclusion_list_and_level_based_mc_1_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10 <- log10(pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product)
+  # T1+Exclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(exclusion_list_and_level_based_mc_1_noncompliant_dose_scaled)) {
+      pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product <- pr_ill_from_dose(exclusion_list_and_level_based_mc_1_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10 <- log10(pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product)
+  # T1+Not Exclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(not_exclusion_list_and_level_based_mc_1_compliant_dose_scaled)) {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product <- pr_ill_from_dose(not_exclusion_list_and_level_based_mc_1_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10 <- log10(pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product)
+  # T1+Not Exclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(not_exclusion_list_and_level_based_mc_1_noncompliant_dose_scaled)) {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product <- pr_ill_from_dose(not_exclusion_list_and_level_based_mc_1_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10 <- log10(pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product)
+  
+  # T2+Compliant
+  if (model_mode==3) {
+    if (!is.na(mc_threshold_2_compliant_dose_scaled)) {
+      pr_ill_from_compliant_2_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_compliant_2_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_compliant_2_product <- pr_ill_from_dose(mc_threshold_2_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_compliant_2_product_log10 <- log10(pr_ill_from_compliant_2_product)
+  # T2+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(mc_threshold_2_noncompliant_dose_scaled)) {
+      pr_ill_from_noncompliant_2_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_noncompliant_2_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_noncompliant_2_product <- pr_ill_from_dose(mc_threshold_2_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_noncompliant_2_product_log10 <- log10(pr_ill_from_noncompliant_2_product)
+  # T2+Inclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(inclusion_list_and_level_based_mc_2_compliant_dose_scaled)) {
+      pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product <- pr_ill_from_dose(inclusion_list_and_level_based_mc_2_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10 <- log10(pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product)
+  # T2+Inclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(inclusion_list_and_level_based_mc_2_noncompliant_dose_scaled)) {
+      pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product <- pr_ill_from_dose(inclusion_list_and_level_based_mc_2_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10 <- log10(pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product)
+  # T2+Exclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(exclusion_list_and_level_based_mc_2_compliant_dose_scaled)) {
+      pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product <- pr_ill_from_dose(exclusion_list_and_level_based_mc_2_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10 <- log10(pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product)
+  # T2+Exclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(exclusion_list_and_level_based_mc_2_noncompliant_dose_scaled)) {
+      pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product <- pr_ill_from_dose(exclusion_list_and_level_based_mc_2_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10 <- log10(pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product)
+  # T2+Not Exclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(not_exclusion_list_and_level_based_mc_2_compliant_dose_scaled)) {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product <- pr_ill_from_dose(not_exclusion_list_and_level_based_mc_2_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10 <- log10(pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product)
+  # T2+Not Exclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(not_exclusion_list_and_level_based_mc_2_noncompliant_dose_scaled)) {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product <- pr_ill_from_dose(not_exclusion_list_and_level_based_mc_2_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10 <- log10(pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product)
+  
+  # T3+Compliant
+  if (model_mode==3) {
+    if (!is.na(mc_threshold_3_compliant_dose_scaled)) {
+      pr_ill_from_compliant_3_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_compliant_3_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_compliant_3_product <- pr_ill_from_dose(mc_threshold_3_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_compliant_3_product_log10 <- log10(pr_ill_from_compliant_3_product)
+  # T3+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(mc_threshold_3_noncompliant_dose_scaled)) {
+      pr_ill_from_noncompliant_3_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_noncompliant_3_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_noncompliant_3_product <- pr_ill_from_dose(mc_threshold_3_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_noncompliant_3_product_log10 <- log10(pr_ill_from_noncompliant_3_product)
+  # T3+Inclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(inclusion_list_and_level_based_mc_3_compliant_dose_scaled)) {
+      pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product <- pr_ill_from_dose(inclusion_list_and_level_based_mc_3_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10 <- log10(pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product)
+  # T3+Inclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(inclusion_list_and_level_based_mc_3_noncompliant_dose_scaled)) {
+      pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product <- pr_ill_from_dose(inclusion_list_and_level_based_mc_3_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10 <- log10(pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product)
+  # T3+Exclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(exclusion_list_and_level_based_mc_3_compliant_dose_scaled)) {
+      pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product <- pr_ill_from_dose(exclusion_list_and_level_based_mc_3_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10 <- log10(pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product)
+  # T3+Exclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(exclusion_list_and_level_based_mc_3_noncompliant_dose_scaled)) {
+      pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product <- pr_ill_from_dose(exclusion_list_and_level_based_mc_3_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10 <- log10(pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product)
+  # T3+Not Exclusion List+Compliant
+  if (model_mode==3) {
+    if (!is.na(not_exclusion_list_and_level_based_mc_3_compliant_dose_scaled)) {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product <- pr_ill_from_dose(not_exclusion_list_and_level_based_mc_3_compliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10 <- log10(pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product)
+  # T3+Not Exclusion List+Noncompliant
+  if (model_mode==3) {
+    if (!is.na(not_exclusion_list_and_level_based_mc_3_noncompliant_dose_scaled)) {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product <- tdr$mean_pr_ill
+    } else {
+      pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product <- NA
+    }
+  } else {
+    # M1 and M2
+    pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product <- pr_ill_from_dose(not_exclusion_list_and_level_based_mc_3_noncompliant_dose_scaled, serving_alpha, serving_beta)
+  }
+  pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10 <- log10(pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product)
+  
+  
+  single_run <- data.frame(
+    iteration=i,
+    model_mode=model_mode,
+    scaling_factor=scaling_factor,
+    salmonella_serving_level=salmonella_serving_level,
+    serotype_in_serving=serotype_in_serving,
+    # Thresholds
+    microbial_threshold_1=microbial_threshold$T1,
+    microbial_threshold_2=microbial_threshold$T2,
+    microbial_threshold_3=microbial_threshold$T3,
+    # is_level_above_threshold
+    is_level_above_threshold_1=is_level_above_threshold_1,
+    is_level_above_threshold_2=is_level_above_threshold_2,
+    is_level_above_threshold_3=is_level_above_threshold_3,
+    # Inclusion List
+    is_serotype_on_inclusion_list=is_serotype_on_inclusion_list,
+    # Threshold+Inclusion List
+    is_level_above_threshold_1_and_from_inclusion_list=is_level_above_threshold_1_and_from_inclusion_list,
+    is_level_above_threshold_2_and_from_inclusion_list=is_level_above_threshold_2_and_from_inclusion_list,
+    is_level_above_threshold_3_and_from_inclusion_list=is_level_above_threshold_3_and_from_inclusion_list,
+    # Threshold+Exclusion List
+    is_level_above_threshold_1_and_from_exclusion_list=is_level_above_threshold_1_and_from_exclusion_list,
+    is_level_above_threshold_2_and_from_exclusion_list=is_level_above_threshold_2_and_from_exclusion_list,
+    is_level_above_threshold_3_and_from_exclusion_list=is_level_above_threshold_3_and_from_exclusion_list,
+    # Threshold+Not Exclusion List
+    is_serotype_above_threshold_1_and_from_not_exclusion_list=is_serotype_above_threshold_1_and_from_not_exclusion_list,
+    is_serotype_above_threshold_2_and_from_not_exclusion_list=is_serotype_above_threshold_2_and_from_not_exclusion_list,
+    is_serotype_above_threshold_3_and_from_not_exclusion_list=is_serotype_above_threshold_3_and_from_not_exclusion_list,
+    
+    overall_pr_ill=overall_pr_ill,
+    # dose_response_scaled_log10
+    overall_pr_ill_log10=overall_pr_ill_log10,
+    # Pr(ill from T+Compliant)
+    pr_ill_from_compliant_1_product=pr_ill_from_compliant_1_product,
+    pr_ill_from_compliant_2_product=pr_ill_from_compliant_2_product,
+    pr_ill_from_compliant_3_product=pr_ill_from_compliant_3_product,
+    # Pr(ill from T+Compliant) Log10
+    pr_ill_from_compliant_1_product_log10=pr_ill_from_compliant_1_product_log10,
+    pr_ill_from_compliant_2_product_log10=pr_ill_from_compliant_2_product_log10,
+    pr_ill_from_compliant_3_product_log10=pr_ill_from_compliant_3_product_log10,
+    # Pr(ill from T+Noncompliant)
+    pr_ill_from_noncompliant_1_product=pr_ill_from_noncompliant_1_product,
+    pr_ill_from_noncompliant_2_product=pr_ill_from_noncompliant_2_product,
+    pr_ill_from_noncompliant_3_product=pr_ill_from_noncompliant_3_product,
+    # Pr(ill from T+Noncompliant) Log10
+    pr_ill_from_noncompliant_1_product_log10=pr_ill_from_noncompliant_1_product_log10,
+    pr_ill_from_noncompliant_2_product_log10=pr_ill_from_noncompliant_2_product_log10,
+    pr_ill_from_noncompliant_3_product_log10=pr_ill_from_noncompliant_3_product_log10,
+    # Pr(ill from T+Inclusion List+Compliant)
+    pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product=pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product,
+    pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product=pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product,
+    pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product=pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product,
+    # Pr(ill from T+Inclusion List+Compliant) Log10
+    pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10=pr_ill_from_inclusion_list_and_level_based_mc_1_compliant_product_log10,
+    pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10=pr_ill_from_inclusion_list_and_level_based_mc_2_compliant_product_log10,
+    pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10=pr_ill_from_inclusion_list_and_level_based_mc_3_compliant_product_log10,
+    # Pr(ill from T+Inclusion List+Noncompliant)
+    pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product=pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product,
+    pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product=pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product,
+    pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product=pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product,
+    # Pr(ill from T+Inclusion List+Noncompliant) Log10
+    pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10=pr_ill_from_inclusion_list_and_level_based_mc_1_noncompliant_product_log10,
+    pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10=pr_ill_from_inclusion_list_and_level_based_mc_2_noncompliant_product_log10,
+    pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10=pr_ill_from_inclusion_list_and_level_based_mc_3_noncompliant_product_log10,
+    # Pr(ill from T+Exclusion List+Compliant)
+    pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product=pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product,
+    pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product=pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product,
+    pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product=pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product,
+    # Pr(ill from T+Exclusion List+Compliant) Log10
+    pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10=pr_ill_from_exclusion_list_and_level_based_mc_1_compliant_product_log10,
+    pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10=pr_ill_from_exclusion_list_and_level_based_mc_2_compliant_product_log10,
+    pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10=pr_ill_from_exclusion_list_and_level_based_mc_3_compliant_product_log10,
+    # Pr(ill from T+Exclusion List+Noncompliant)/P(ill) from Serotype Kentucky & level over the threshold
+    pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product=pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product,
+    pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product=pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product,
+    pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product=pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product,
+    # Pr(ill from T+Exclusion List+Noncompliant) Log10/P(ill) from Serotype Kentucky & level over the threshold
+    pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10=pr_ill_from_exclusion_list_and_level_based_mc_1_noncompliant_product_log10,
+    pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10=pr_ill_from_exclusion_list_and_level_based_mc_2_noncompliant_product_log10,
+    pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10=pr_ill_from_exclusion_list_and_level_based_mc_3_noncompliant_product_log10,
+    # Pr(ill from T+Not Exclusion List+Compliant)
+    pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product=pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product=pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product=pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product,
+    # Pr(ill from T+Not Exclusion List+Compliant) Log10
+    pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10=pr_ill_from_not_exclusion_list_and_level_based_mc_1_compliant_product_log10,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10=pr_ill_from_not_exclusion_list_and_level_based_mc_2_compliant_product_log10,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10=pr_ill_from_not_exclusion_list_and_level_based_mc_3_compliant_product_log10,
+    # Pr(ill from T+Not Exclusion List+Noncompliant)/P(ill) from Serotype not Kentucky & level over the threshold
+    pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product=pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product=pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product=pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product,
+    # Pr(ill from T+Not Exclusion List+Noncompliant) Log10/P(ill) from Serotype not Kentucky & level over the threshold
+    pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10=pr_ill_from_not_exclusion_list_and_level_based_mc_1_noncompliant_product_log10,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10=pr_ill_from_not_exclusion_list_and_level_based_mc_2_noncompliant_product_log10,
+    pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10=pr_ill_from_not_exclusion_list_and_level_based_mc_3_noncompliant_product_log10,
+    # Tuenis
+    tdr_equivalent_serotype=tdr$equivalent_serotype,
+    tdr_sample_size=tdr$sample_size,
+    tdr_sample_dose=tdr$dose,
+    tdr_w1=tdr$w1,
+    tdr_z1=tdr$z1,
+    tdr_u1=tdr$u1,
+    tdr_v1=tdr$v1,
+    tdr_a=tdr$a,
+    tdr_b=tdr$b,
+    tdr_w2=tdr$w2,
+    tdr_z2=tdr$z2,
+    tdr_u2=tdr$u2,
+    tdr_v2=tdr$v2,
+    tdr_r=tdr$r,
+    tdr_n=tdr$n,
+    tdr_mean_infection_vector=tdr$mean_infection_vector,
+    tdr_mean_conditional_illness=tdr$mean_conditional_illness,
+    tdr_mean_pr_ill=tdr$mean_pr_ill,
+    stringsAsFactors=FALSE
+  )
+  return(single_run)
+}
+```
+
+```{r Unified Poultry Function - Baseline Survey 2012 (Parts) - M1}
+salmonella_mean <- -3.19 # Baseline Survey 2012 (Parts)
+salmonella_st_dev <- 1.29 # Baseline Survey 2012 (Parts)
+
+product_consumed_per_individual_per_day_mean <- 2.06 # CDC 2016, Lambertini  et al. (2019)
+product_consumed_per_individual_per_day_st_dev <- 0.23 # CDC 2016, Lambertini  et al. (2019)
+
+m1_baseline_survey_parts <- poultry_model_clustered(1e6, 10, 12, 1, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, 0.00011, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, 89969366913.2337, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs = FALSE, comment="baseline_survey_parts")
+m1_baseline_survey_parts_specifics <- get_table_values(m1_baseline_survey_parts)
+write.csv(m1_baseline_survey_parts_specifics, "m1_baseline_result_subset.csv", row.names = FALSE)
+```
+
+```{r Unified Poultry Function - Baseline Survey 2012 (Parts) - M2}
+salmonella_mean <- -3.19 # Baseline Survey 2012 (Parts)
+salmonella_st_dev <- 1.29 # Baseline Survey 2012 (Parts)
+
+product_consumed_per_individual_per_day_mean <- 2.06 # CDC 2016, Lambertini  et al. (2019)
+product_consumed_per_individual_per_day_st_dev <- 0.23 # CDC 2016, Lambertini  et al. (2019)
+
+m2_baseline_survey_parts <- poultry_model_clustered(1e6, 10, 12, 2, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, 0.00012, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, 89969366913.2337, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs = TRUE, comment="baseline_survey_parts")
+m2_baseline_survey_parts_specifics <- get_table_values(m2_baseline_survey_parts)
+write.csv(m2_baseline_survey_parts_specifics, "m2_baseline_result_subset.csv", row.names = FALSE)
+
+```
+
+```{r Unified Poultry Function - Baseline Survey 2012 (Parts) - M3}
+salmonella_mean <- -3.19 # Baseline Survey 2012 (Parts)
+salmonella_st_dev <- 1.29 # Baseline Survey 2012 (Parts)
+
+product_consumed_per_individual_per_day_mean <- 2.06 # CDC 2016, Lambertini  et al. (2019)
+product_consumed_per_individual_per_day_st_dev <- 0.23 # CDC 2016, Lambertini  et al. (2019)
+
+m3_baseline_survey_parts <- poultry_model_clustered(1e6, 10, 12, 3, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, 0.00002, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, 89969366913.2337, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs = TRUE, comment="baseline_survey_parts")
+m3_baseline_survey_parts_specifics <- get_table_values(m3_baseline_survey_parts)
+write.csv(m1_baseline_survey_parts_specifics, "m1_baseline_result_subset.csv", row.names = FALSE)
+
+```
+
+```{r Unified Poultry Function - New HACCP Data - M1}
+salmonella_mean <- -5.53 # New HACCP Data
+salmonella_st_dev <- 2.45 # New HACCP Data
+
+product_consumed_per_individual_per_day_mean <- 2.06 # CDC 2016, Lambertini  et al. (2019)
+product_consumed_per_individual_per_day_st_dev <- 0.23 # CDC 2016, Lambertini  et al. (2019)
+
+m1_new_haccp <- poultry_model_clustered(1e6, 10, 12, 1, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, 0.0000016, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, 89969366913.2337, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs = TRUE, comment="new_haccp")
+
+m1_new_haccp_specifics <- get_table_values(m1_new_haccp)
+write.csv(m1_new_haccp_specifics, "M1_HACCP_result_subset.csv", row.names = FALSE)
+```
+
+```{r Unified Poultry Function - New HACCP Data - M2}
+salmonella_mean <- -5.53 # New HACCP Data
+salmonella_st_dev <- 2.45 # New HACCP Data
+
+product_consumed_per_individual_per_day_mean <- 2.06 # CDC 2016, Lambertini  et al. (2019)
+product_consumed_per_individual_per_day_st_dev <- 0.23 # CDC 2016, Lambertini  et al. (2019)
+
+m2_HACCP_parts <- poultry_model_clustered(1e6, 10, 12, 2, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, 0.00000050, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, 89969366913.2337, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs = TRUE, comment="new_haccp")
+m2_HACCP_parts_specifics <- get_table_values(m2_HACCP_parts)
+write.csv(m2_HACCP_parts_specifics, "m2_result_subset.csv", row.names = FALSE)
+
+```
+
+```{r Unified Poultry Function - New HACCP Data - M3}
+salmonella_mean <- -5.53 # New HACCP Data
+salmonella_st_dev <- 2.45 # New HACCP Data
+
+product_consumed_per_individual_per_day_mean <- 2.06 # CDC 2016, Lambertini  et al. (2019)
+product_consumed_per_individual_per_day_st_dev <- 0.23 # CDC 2016, Lambertini  et al. (2019)
+
+m3_new_haccp <- poultry_model_clustered(1e6, 10, 12, 3, serotype_probabilities, serotype_equivalents, salmonella_mean, salmonella_st_dev, 0.00000015, product_consumed_per_individual_per_day_mean, product_consumed_per_individual_per_day_st_dev, 89969366913.2337, teunis_dose_response, tuenis_submodel_parameters, pr_ill_from_dose, poultry_model, save_runs = TRUE, comment="new_haccp")
+m3_new_haccp_specifics <- get_table_values(m3_new_haccp)
+write.csv(m3_new_haccp_specifics, "m3_HACCP_result_subset.csv", row.names = FALSE)
+
+```
